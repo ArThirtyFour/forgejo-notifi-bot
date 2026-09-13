@@ -14,6 +14,8 @@ from aiogram_dialog.widgets.kbd import (
 )
 from aiogram_dialog.widgets.text import Const, Format
 
+from magic_filter import F
+
 from app.config import Config
 from app.dialogs.repos._helpers import repo_label, user_integrations
 from app.dialogs.repos.state import ReposSG, ReposState
@@ -83,6 +85,10 @@ async def on_repos_refresh(
 repos_window = Window(
     Format("<b>{title}</b> — {count} repos"),
     Format("\n❌ {error}", when="has_error"),
+    Const(
+        "\n<i>No repositories found.</i>",
+        when=~F["repos"] & ~F["has_error"],
+    ),
     Const(
         "\nLegend: ✅ already integrated  •  🔒 private  •  🔓 public  "
         "•  ⚠️ no admin access",

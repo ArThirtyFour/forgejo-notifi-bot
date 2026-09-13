@@ -181,7 +181,7 @@ async def on_remove_confirmed(
     user = await _current_user(manager)
     if user is not None:
         await User.filter(id=user.id).update(token=None)
-        invalidate_for_user(user)
+        await invalidate_for_user(user)
     await manager.switch_to(TokenSG.main)
 
 
@@ -227,7 +227,7 @@ async def on_token_message(
 
     db_user = await User.get_or_none(telegram_id=user_id)
     if db_user:
-        invalidate_for_user(db_user)
+        await invalidate_for_user(db_user)
 
     state.error = None
     state.selected_server = None

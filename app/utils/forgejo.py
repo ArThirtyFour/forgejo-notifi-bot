@@ -60,7 +60,7 @@ def invalidate(token: str) -> None:
         _cache.pop(key, None)
 
 
-def invalidate_for_user(user, _config=None) -> None:
+async def invalidate_for_user(user, _config=None) -> None:
     if user is not None and user.token:
         invalidate(user.token)
 
