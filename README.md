@@ -120,10 +120,12 @@ app/
 
 ## Quick Start
 
-1. **Install dependencies:**
+1. **Install dependencies (via `uv` or `pip`):**
    ```bash
-   pip install -r requirements.txt
+   uv venv
+   uv pip install -r requirements.txt
    ```
+   *(or standard `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`)*
 
 2. **Configure the bot:**
    ```bash
@@ -133,7 +135,7 @@ app/
 
 3. **Start the bot:**
    ```bash
-   python -m app
+   uv run python -m app
    ```
 
 4. **Connect in Telegram:**
@@ -155,3 +157,25 @@ app/
 | `/set_topic` | Group Topic | Route alerts to the current forum topic |
 | `/delete owner/repo` | Group | Remove an integrated repository |
 | `/reinstall` | Group | Re-sync subscriptions with Forgejo API |
+
+## Systemd Service (Auto-start / Background)
+
+To run the bot 24/7 as a systemd background service on Linux using `uv`:
+
+1. Copy and adjust the example service file:
+   ```bash
+   sudo cp forgejo-bot.service.example /etc/systemd/system/forgejo-bot.service
+   sudo nano /etc/systemd/system/forgejo-bot.service
+   ```
+
+2. Enable and start the service:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now forgejo-bot
+   ```
+
+3. Check logs and status:
+   ```bash
+   sudo systemctl status forgejo-bot
+   journalctl -u forgejo-bot -f
+   ```
