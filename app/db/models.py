@@ -38,6 +38,7 @@ class AuthSource(str, Enum):
 class User(Model):
     id = fields.BigIntField(pk=True)
     telegram_id = fields.BigIntField()
+    server_url = fields.CharField(max_length=255, default="https://codeberg.org", null=True)
     token = fields.CharField(max_length=255, null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
 
@@ -76,8 +77,13 @@ class Installation(Model):
 
 class Integration(Model):
     id = fields.BigIntField(pk=True)
+    server_url = fields.CharField(max_length=255, default="https://codeberg.org", null=True)
     repository_name = fields.CharField(max_length=255, null=True)
     integration_token = fields.CharField(max_length=255, null=True)
+    last_commit_sha = fields.CharField(max_length=64, null=True)
+    last_issue_id = fields.BigIntField(null=True)
+    last_pr_id = fields.BigIntField(null=True)
+    last_release_id = fields.BigIntField(null=True)
     # How this integration was set up. Existing rows backfill to "pat".
     auth_source = fields.CharField(max_length=8, default=AuthSource.pat.value)
     # Set only for App-based integrations; null for PAT-based ones.

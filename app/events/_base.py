@@ -9,9 +9,14 @@ class _Base(BaseModel):
 
 
 class GitHubUser(_Base):
-    login: str
+    login: Optional[str] = None
+    username: Optional[str] = None
     html_url: Optional[str] = None
     id: Optional[int] = None
+
+    @property
+    def handle(self) -> str:
+        return self.username or self.login or "user"
 
 
 class Repository(_Base):
@@ -19,8 +24,10 @@ class Repository(_Base):
     name: Optional[str] = None
     html_url: str
     private: bool = False
+    stars_count: int = 0
     stargazers_count: int = 0
     forks: int = 0
+    forks_count: int = 0
 
 
 class BranchRef(_Base):
@@ -34,7 +41,7 @@ class Issue(_Base):
     html_url: str
     user: GitHubUser
     body: Optional[str] = None
-    pull_request: Optional[dict] = None  # presence => the issue is a PR
+    pull_request: Optional[dict] = None
 
 
 class PullRequest(_Base):
@@ -55,7 +62,7 @@ class Comment(_Base):
     body: Optional[str] = None
     html_url: str
     user: GitHubUser
-    path: Optional[str] = None  # for review comments
+    path: Optional[str] = None
 
 
 class Discussion(_Base):

@@ -194,7 +194,7 @@ async def cb_integ_delete(callback: CallbackQuery, bot: Bot):
             msg,
             f"✅ <code>{repo_name}</code> removed.\n"
             "No integrations left in this chat.\n\n"
-            "<i>The webhook on GitHub side stays — delete it manually in "
+            "<i>The webhook on the server side stays — delete it manually in "
             "the repo's Settings → Webhooks if you want it gone there too.</i>",
         )
     else:
@@ -255,7 +255,7 @@ async def delete_handler(message: Message, bot: Bot):
     await message.answer(
         f"✅ Repository <code>{repo_name}</code> removed.\n"
         "<i>Note: this only removes the integration from the bot. "
-        "The webhook on GitHub side stays — delete it manually in repo Settings → Webhooks "
+        "The webhook on the server side stays — delete it manually in repo Settings → Webhooks "
         "if you want it gone there too.</i>"
     )
 

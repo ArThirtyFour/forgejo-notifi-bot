@@ -69,7 +69,7 @@ integration_detail_window = Window(
         "Added {created_at}\n"
         "Auth source: <code>{auth_source}</code>\n\n"
         "<i>Note: deleting only removes the integration from the bot. "
-        "The webhook on the GitHub side stays — clean it up manually in "
+        "The webhook on the server side stays — clean it up manually in "
         "the repo's Settings → Webhooks if you want it gone there too.</i>",
         when="ok",
     ),

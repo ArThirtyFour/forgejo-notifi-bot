@@ -11,8 +11,8 @@ class User(models.User):
         return await cls.get_or_none(telegram_id=telegram_id)
 
     @classmethod
-    async def register(cls, telegram_id):
-        await User(telegram_id=telegram_id).save()
+    async def register(cls, telegram_id, server_url: str = "https://codeberg.org"):
+        await User(telegram_id=telegram_id, server_url=server_url).save()
 
     @classmethod
     async def get_count(cls) -> int:
@@ -21,6 +21,18 @@ class User(models.User):
     @classmethod
     async def write_token(cls, telegram_id: int, token: str):
         await cls.filter(telegram_id=telegram_id).update(token=token)
+
+    @classmethod
+    async def set_server(cls, telegram_id: int, server_url: str):
+        await cls.filter(telegram_id=telegram_id).update(server_url=server_url)
+
+    @classmethod
+    async def set_server_and_token(
+        cls, telegram_id: int, server_url: str, token: str
+    ):
+        await cls.filter(telegram_id=telegram_id).update(
+            server_url=server_url, token=token
+        )
 
     @classmethod
     async def get_by_id(cls, id: int) -> Optional["User"]:
@@ -60,7 +72,13 @@ class Chat(models.Chat):
         return await chat.integrations.all()  # type: ignore[attr-defined]
 
     @classmethod
-    async def add_integration(cls, chat_id: int, user_id: int, repository_name: str) -> tuple:
+    async def add_integration(
+        cls,
+        chat_id: int,
+        user_id: int,
+        repository_name: str,
+        server_url: str = "https://codeberg.org",
+    ) -> tuple:
         chat = await cls.get(chat_id=chat_id)
         user = await User.get(id=user_id)
 
@@ -72,6 +90,7 @@ class Chat(models.Chat):
             integration = await Integration.create(
                 chat=chat,
                 user=user,
+                server_url=server_url,
                 repository_name=repository_name,
                 integration_token=existing.integration_token,
             )
@@ -83,6 +102,7 @@ class Chat(models.Chat):
         integration = await Integration.create(
             chat=chat,
             user=user,
+            server_url=server_url,
             repository_name=repository_name,
             integration_token=integration_token,
         )
@@ -142,6 +162,7 @@ class Integration(models.Integration):
         chat_id: int,
         user_id: int,
         integration_token: Optional[str] = None,
+        server_url: str = "https://codeberg.org",
     ):
         chat = await Chat.get(chat_id=chat_id)
         user = await User.get(id=user_id)
@@ -154,6 +175,7 @@ class Integration(models.Integration):
             repository_name=repository_name,
             chat=chat,
             user=user,
+            server_url=server_url,
             integration_token=integration_token,
         )
 

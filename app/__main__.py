@@ -1,23 +1,25 @@
 import asyncio
 import logging
+import sys
 import threading
 
 import coloredlogs
 from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram_dialog import setup_dialogs
 
 from app import db
 from app.arguments import parse_arguments
+from app.commands import remove_bot_commands, setup_bot_commands
 from app.config import Config, parse_config
 from app.db import close_orm, init_orm
 from app.handlers import get_handlers_router
 from app.middlewares import register_middlewares
-from app.commands import remove_bot_commands, setup_bot_commands
+from app.services.poller import poller_loop
 from app.webhook.main import dispatcher as webhook_dispatcher
 
 
@@ -35,6 +37,9 @@ async def on_startup(dispatcher: Dispatcher, bot: Bot, config: Config):
 
     tortoise_config = config.database.get_tortoise_config()
     await init_orm(tortoise_config)
+
+    # Start background Forgejo poller task
+    asyncio.create_task(poller_loop(config))
 
     bot_info = await bot.get_me()
 
@@ -65,13 +70,7 @@ async def on_shutdown(dispatcher: Dispatcher, bot: Bot, config: Config):
     await close_orm()
 
 
-async def main():
-    coloredlogs.install(level=logging.INFO)
-    logging.info("Starting bot...")
-
-    arguments = parse_arguments()
-    config = parse_config(arguments.config)
-
+async def run_bot(config: Config):
     tortoise_config = config.database.get_tortoise_config()
     try:
         await db.create_models(tortoise_config)
@@ -93,9 +92,7 @@ async def main():
     }
 
     bot = Bot(token, **bot_settings)
-
     storage = MemoryStorage()
-
     dp = Dispatcher(storage=storage)
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
@@ -103,9 +100,29 @@ async def main():
     await dp.start_polling(bot, config=config)  # type: ignore[arg-type]
 
 
-if __name__ == "__main__":
+def main():
+    coloredlogs.install(level=logging.INFO)
+    arguments = parse_arguments()
     try:
-        threading.Thread(target=webhook_dispatcher).start()
-        asyncio.run(main())
+        config = parse_config(arguments.config)
+    except FileNotFoundError as e:
+        logging.error("%s", e)
+        sys.exit(1)
+    except Exception as e:
+        logging.error("Failed to parse config: %s", e)
+        sys.exit(1)
+
+    logging.info("Starting Forgejo Notifier Bot...")
+
+    try:
+        webhook_thread = threading.Thread(
+            target=webhook_dispatcher, args=(config,), daemon=True
+        )
+        webhook_thread.start()
+        asyncio.run(run_bot(config))
     except (KeyboardInterrupt, SystemExit):
         logging.info("Bot stopped!")
+
+
+if __name__ == "__main__":
+    main()

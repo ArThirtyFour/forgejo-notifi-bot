@@ -6,12 +6,12 @@ from app.config import Config
 users_commands = {
     "start": "Start bot / show setup guide",
     "help": "Show setup guide and command reference",
+    "connect": "Connect Forgejo/Gitea server and token (DM)",
     "integrate": "Integrate a repository (in group)",
     "integrations": "List integrated repositories",
     "delete": "Remove an integration",
-    "reinstall": "Re-sync GitHub webhook events for this chat",
-    "install": "Install the GitHub App for your account (DM)",
-    "token": "Set or replace your GitHub token (DM)",
+    "reinstall": "Re-sync webhook events for this chat",
+    "token": "Manage server connection and token (DM)",
     "set_topic": "Send notifications to current forum topic",
     "events": "Toggle event types per chat",
 }

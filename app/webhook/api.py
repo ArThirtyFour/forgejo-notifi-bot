@@ -1,25 +1,41 @@
 import html
 import logging
 import time
+from typing import Optional
 
 import aiohttp
 from fastapi import APIRouter, Header, Request
 
-from app.config import parse_config
+from app.config import Config, parse_config
 from app.db.functions import Chat, EventSetting, Integration
 from app.events import EventCtx, build_message
 from app.utils.text_splitter import split_html_message
 
 router = APIRouter()
-config = parse_config()
+_config: Optional[Config] = None
+
+
+def set_config(cfg: Config) -> None:
+    global _config
+    _config = cfg
+
+
+def get_config() -> Config:
+    global _config
+    if _config is None:
+        _config = parse_config()
+    return _config
+
 
 floodwait_cache: dict[int, float] = {}
-
-# Rate-limit DM notifications about delivery failures.
-# Keyed by (telegram_user_id, chat_id) so different chats / different users
-# don't suppress each other.
 _delivery_failure_notified: dict[tuple[int, int], float] = {}
-_NOTIFY_INTERVAL = 1800.0  # 30 minutes
+_NOTIFY_INTERVAL = 1800.0
+
+EVENT_NAME_MAP = {
+    "issue": "issues",
+    "pull_request_comment": "pull_request_review_comment",
+    "pull_request_approved": "pull_request_review",
+}
 
 
 def check_floodwait(chat_id: int, floodwait: int = 3) -> bool:
@@ -33,8 +49,9 @@ def check_floodwait(chat_id: int, floodwait: int = 3) -> bool:
 async def _post_send(
     session: aiohttp.ClientSession, data: dict
 ) -> tuple[int, str]:
+    cfg = get_config()
     async with session.post(
-        f"https://api.telegram.org/bot{config.bot.token}/sendMessage",
+        f"https://api.telegram.org/bot{cfg.bot.token}/sendMessage",
         json=data,
         timeout=aiohttp.ClientTimeout(total=5),
     ) as response:
@@ -46,10 +63,7 @@ async def _notify_owner_of_delivery_failure(
     integration: Integration,
     failure_summary: str,
 ) -> None:
-    """DM the user who set up this integration about a persistent delivery
-    failure. Rate-limited per (user, chat) to avoid spamming on every event
-    while the chat is unreachable."""
-    user = integration.user  # prefetched in get_by_token
+    user = integration.user
     chat = integration.chat
     if user is None or chat is None or not user.telegram_id:
         return
@@ -58,14 +72,6 @@ async def _notify_owner_of_delivery_failure(
     now = time.time()
     last = _delivery_failure_notified.get(key)
     if last is not None and now - last < _NOTIFY_INTERVAL:
-        logging.info(
-            "Suppressed delivery-failure DM to %s about chat %s "
-            "(last notified %.0fs ago, interval %.0fs)",
-            user.telegram_id,
-            chat.chat_id,
-            now - last,
-            _NOTIFY_INTERVAL,
-        )
         return
     _delivery_failure_notified[key] = now
 
@@ -80,8 +86,7 @@ async def _notify_owner_of_delivery_failure(
         "• I lost permissions to write there\n"
         "• The forum topic the integration uses was closed\n\n"
         "Run <code>/integrations</code> in that chat to manage, or "
-        "<code>/delete owner/repo</code> there to remove the integration "
-        "if the chat is gone."
+        "<code>/delete owner/repo</code> there to remove the integration."
     )
     data = {
         "chat_id": user.telegram_id,
@@ -117,10 +122,6 @@ async def send_message(
     integration: Integration,
     text: str,
 ) -> None:
-    """Send a (possibly long) Telegram-HTML message to the integration's
-    chat. Splits the text into 4096-safe chunks at safe HTML boundaries and
-    sends them sequentially, so one event with many commits / a huge body
-    arrives as a series of messages instead of falling on the floor."""
     chunks = split_html_message(text)
     for chunk in chunks:
         await _send_one_chunk(session, integration, chunk)
@@ -131,9 +132,6 @@ async def _send_one_chunk(
     integration: Integration,
     text: str,
 ) -> None:
-    """Send a single chunk that's already known to fit Telegram's limit.
-    Handles topic-thread retry, owner-notify on persistent failure, and
-    auto-cleanup of dead topics."""
     chat = integration.chat
     if chat is None:
         return
@@ -154,10 +152,6 @@ async def _send_one_chunk(
         if status < 400:
             return
 
-        # Topic deleted / closed — retry without thread so the message at
-        # least lands in General. We don't notify the owner if the retry
-        # succeeds; if it also fails, fall through to the persistent-failure
-        # branch below which DOES notify.
         if topic_id and status == 400 and (
             "thread not found" in body.lower() or "topic_closed" in body.lower()
         ):
@@ -170,62 +164,37 @@ async def _send_one_chunk(
             data.pop("message_thread_id", None)
             status, body = await _post_send(session, data)
             if status < 400:
-                # Retry to General succeeded. If the thread was *deleted*
-                # (not just closed), drop the dead topic_id from the chat
-                # row so future events don't waste an extra round-trip.
                 if thread_gone:
                     try:
                         await Chat.remove_topic(chat_id)
-                        logging.info(
-                            "Cleared dead topic %s from chat %s",
-                            topic_id,
-                            chat_id,
-                        )
                     except Exception:
-                        logging.exception(
-                            "Couldn't clear topic_id for chat %s", chat_id
-                        )
+                        pass
                 return
 
-        # Persistent failure: log + DM the owner (5xx is treated as transient
-        # and only logged, since GitHub will keep delivering future events
-        # and the next one might succeed).
-        if status == 403:
-            logging.warning(
-                "Bot can't write to chat %s (kicked / no permission): %s",
-                chat_id,
-                body,
-            )
+        if status == 403 or (400 <= status < 500):
             await _notify_owner_of_delivery_failure(session, integration, body)
-        elif 400 <= status < 500:
-            logging.warning(
-                "Telegram sendMessage to %s returned %s: %s",
-                chat_id,
-                status,
-                body,
-            )
-            await _notify_owner_of_delivery_failure(session, integration, body)
-        else:
-            # 5xx
-            logging.warning(
-                "Telegram sendMessage to %s returned %s (transient): %s",
-                chat_id,
-                status,
-                body,
-            )
     except aiohttp.ClientError as e:
         logging.error("Error sending to chat %s: %s", chat_id, e)
 
 
 @router.post("/{token}")
-async def webhook(req: Request, token: str, X_GitHub_Event: str = Header()):
+async def webhook(
+    req: Request,
+    token: str,
+    x_forgejo_event: Optional[str] = Header(None, alias="X-Forgejo-Event"),
+    x_gitea_event: Optional[str] = Header(None, alias="X-Gitea-Event"),
+    x_github_event: Optional[str] = Header(None, alias="X-GitHub-Event"),
+):
+    raw_event = x_forgejo_event or x_gitea_event or x_github_event or ""
+    event_type = EVENT_NAME_MAP.get(raw_event, raw_event)
+
     payload = await req.json()
     integrations = await Integration.get_by_token(token)
 
     if not integrations:
         logging.info(
-            "PAT webhook %s for token %s…: no matching integrations",
-            X_GitHub_Event,
+            "Webhook %s for token %s…: no matching integrations",
+            event_type,
             token[:6],
         )
         return {"status": "ok", "matched": 0, "sent": 0}
@@ -234,23 +203,29 @@ async def webhook(req: Request, token: str, X_GitHub_Event: str = Header()):
     skipped_event = 0
     skipped_floodwait = 0
     skipped_no_message = 0
+
     async with aiohttp.ClientSession() as session:
         for integration in integrations:
             chat = integration.chat
             user = integration.user
 
-            if not await EventSetting.is_enabled(chat.chat_id, X_GitHub_Event):
+            if not await EventSetting.is_enabled(chat.chat_id, event_type):
                 skipped_event += 1
                 continue
 
-            if X_GitHub_Event == "star" and check_floodwait(
+            if event_type == "star" and check_floodwait(
                 chat.chat_id, chat.floodwait
             ):
                 skipped_floodwait += 1
                 continue
 
-            ctx = EventCtx(auth_token=user.token, config=config)
-            message = build_message(X_GitHub_Event, payload, ctx)
+            server_url = integration.server_url or (user.server_url if user else None) or "https://codeberg.org"
+            ctx = EventCtx(
+                auth_token=user.token if user else None,
+                server_url=server_url,
+                config=get_config(),
+            )
+            message = build_message(event_type, payload, ctx)
             if not message:
                 skipped_no_message += 1
                 continue
@@ -258,9 +233,9 @@ async def webhook(req: Request, token: str, X_GitHub_Event: str = Header()):
             sent += 1
 
     logging.info(
-        "PAT webhook %s for token %s…: %d integrations, sent=%d, "
+        "Webhook %s for token %s…: %d integrations, sent=%d, "
         "skipped(event=%d floodwait=%d no_msg=%d)",
-        X_GitHub_Event,
+        event_type,
         token[:6],
         len(integrations),
         sent,

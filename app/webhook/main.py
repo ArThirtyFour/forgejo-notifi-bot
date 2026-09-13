@@ -1,20 +1,19 @@
 from fastapi import FastAPI
-
 import uvicorn
 
-from app.webhook.api import router as pat_router
-from app.webhook.github_app import router as github_app_router
+from app.config import Config
+from app.webhook.api import router as webhook_router, set_config
 
 
-def dispatcher():
+def dispatcher(config: Config | None = None):
+    if config is not None:
+        set_config(config)
+
     app = FastAPI()
-    # Per-integration PAT webhooks: POST /webhook/{integration_token}
-    app.include_router(router=pat_router, prefix="/webhook")
-    # GitHub App: GET /github/setup + POST /webhook (App-level, single URL)
-    app.include_router(router=github_app_router)
+    app.include_router(router=webhook_router, prefix="/webhook")
 
     @app.get("/")
     async def root():
-        return {"message": "Hello World"}
+        return {"status": "ok", "service": "forgejo-notifier-bot"}
 
     uvicorn.run(app, host="0.0.0.0", port=4454)

@@ -1,7 +1,3 @@
-"""/reinstall — re-sync GitHub webhook subscriptions for all integrations
-in the current chat. Useful after the bot adds support for new event types."""
-import asyncio
-
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command
@@ -10,7 +6,7 @@ from aiogram.types import Message
 from app.config import Config
 from app.db.functions import Chat, User
 from app.handlers.user.event_settings import invalidate_subscription_cache
-from app.utils.hooks import HookError, update_webhook
+from app.utils.forgejo import HookError, update_webhook
 
 router = Router()
 
@@ -60,17 +56,18 @@ async def reinstall_handler(message: Message, bot: Bot, config: Config):
             failures.append(
                 (
                     integration.repository_name,
-                    "Owner of this integration has no GitHub token saved.",
+                    "Owner of this integration has no token saved.",
                 )
             )
             continue
 
-        result = await asyncio.to_thread(
-            update_webhook,
-            config.api.host,
-            integration.integration_token,
-            user.token,
-            integration.repository_name,
+        server_url = integration.server_url or user.server_url or "https://codeberg.org"
+        result = await update_webhook(
+            server_url=server_url,
+            token=user.token,
+            repo_name=integration.repository_name,
+            host=config.api.host,
+            endpoint=integration.integration_token,
         )
 
         if isinstance(result, HookError):

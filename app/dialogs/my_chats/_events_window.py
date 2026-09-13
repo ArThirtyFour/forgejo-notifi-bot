@@ -65,7 +65,7 @@ async def events_getter(
         all_events = {e.value for e in EventType} - {"ping"}
         if all_events - available:
             stale_banner = (
-                "\n\n⚠️ Some events aren't subscribed on the GitHub side. "
+                "\n\n⚠️ Some events aren't subscribed on the server side. "
                 "Run /reinstall in the chat to update."
             )
 
@@ -122,7 +122,7 @@ async def on_event_toggle(
     )
     if is_stale and not setting.enabled:
         await callback.answer(
-            "This event isn't subscribed on the GitHub side. Run /reinstall "
+            "This event isn't subscribed on the server side. Run /reinstall "
             "in the chat to update webhook subscriptions before enabling it.",
             show_alert=True,
         )

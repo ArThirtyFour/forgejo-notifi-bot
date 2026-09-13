@@ -9,7 +9,7 @@ from app.config import Config
 from app.db.functions import Integration
 from app.dialogs.repos.state import ReposSG, ReposState
 from app.utils.dialog_helpers import current_user_for_manager
-from app.utils.github_access import list_repos_for_org
+from app.utils.forgejo import list_repos_for_org
 
 
 async def repo_detail_getter(
@@ -42,9 +42,7 @@ async def repo_detail_getter(
         "\n".join(chat_lines) if chat_lines else "<i>not integrated yet</i>"
     )
 
-    source_label = (
-        "🔗 GitHub App" if repo["source"] == "app" else "🔑 Personal Access Token"
-    )
+    server_url = user.server_url or "https://codeberg.org"
 
     return {
         "missing": False,
@@ -60,7 +58,7 @@ async def repo_detail_getter(
         ),
         "description": repo["description"] or "<i>no description</i>",
         "integrations_block": integrations_block,
-        "source_label": source_label,
+        "server_url": server_url,
     }
 
 
@@ -69,7 +67,7 @@ repo_detail_window = Window(
     Format(
         "<b>{full_name}</b>\n"
         "{private_label}  •  ⭐ {stars}  •  {admin_label}\n"
-        "Source: {source_label}\n"
+        "Server: <code>{server_url}</code>\n"
         "<i>{description}</i>\n\n"
         "🔌 <b>Integrations:</b>\n{integrations_block}",
         when="ok",

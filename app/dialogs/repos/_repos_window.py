@@ -18,7 +18,7 @@ from app.config import Config
 from app.dialogs.repos._helpers import repo_label, user_integrations
 from app.dialogs.repos.state import ReposSG, ReposState
 from app.utils.dialog_helpers import current_user_for_manager
-from app.utils.github_access import (
+from app.utils.forgejo import (
     invalidate_for_user,
     list_repos_for_org,
 )

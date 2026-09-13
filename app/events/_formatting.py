@@ -17,8 +17,10 @@ def truncate(text: Optional[str], limit: int = 400) -> str:
 
 
 def user_link(user: GitHubUser) -> str:
-    url = user.html_url or f"https://github.com/{user.login}"
-    return f'<a href="{url}">@{_(user.login)}</a>'
+    handle = user.handle
+    if user.html_url:
+        return f'<a href="{user.html_url}">@{_(handle)}</a>'
+    return f'@{_(handle)}'
 
 
 def repo_link(repo: Repository) -> str:

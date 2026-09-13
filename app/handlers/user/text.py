@@ -1,19 +1,9 @@
-"""Free-form text in private chat — dispatcher.
-
-Two paths depending on user state:
-  • No PAT yet → try to save the input as their token (legacy convenience;
-    the modern flow is via the Connect dialog).
-  • Has PAT   → treat the input as a repo name and show its summary.
-
-Slash commands have their own handlers earlier in the router chain; if one
-slips through unmatched, we ignore it here.
-"""
 from aiogram import F, Router
 from aiogram.types import Message
 
 from app.db.functions import User
 from app.utils.filters import IS_DM
-from app.utils.hooks import HookError, check_repo, validate
+from app.utils.forgejo import HookError, check_repo
 
 router = Router()
 
@@ -34,46 +24,37 @@ async def dm_text_handler(message: Message):
         return
 
     if user.token:
-        await _show_repo_summary(message, user.token, text)
+        await _show_repo_summary(message, user, text)
     else:
-        await _try_save_pat(message, message.from_user.id, text)
+        await message.answer(
+            "Tap <b>🔌 Connect</b> on the keyboard or send /connect "
+            "to connect your Forgejo/Gitea account."
+        )
 
 
 async def _show_repo_summary(
-    message: Message, token: str, repo_name: str
+    message: Message, user: User, repo_name: str
 ) -> None:
-    repo = check_repo(token, repo_name)
-    if isinstance(repo, HookError):
-        await message.answer(f"❌ {repo.message}")
+    server_url = user.server_url or "https://codeberg.org"
+    ok, repo_or_err = await check_repo(server_url, user.token or "", repo_name)
+    if not ok and isinstance(repo_or_err, HookError):
+        await message.answer(f"❌ {repo_or_err.message}")
         return
 
-    summary = (
-        f"📐 <b>{'🔒' if repo.private else ''} "
-        f"<a href='https://github.com/{repo.full_name}'>{repo.full_name}</a></b> "
-        f"{repo.stargazers_count} ⭐️\n"
-        f"<i>{repo.description if repo.description else 'No description'}</i>\n\n"
-        f"Run in a group: <code>/integrate {repo.full_name}</code> "
-        "to start receiving notifications."
-    )
-    await message.answer(summary)
+    if isinstance(repo_or_err, dict):
+        full_name = repo_or_err.get("full_name") or repo_name
+        is_private = bool(repo_or_err.get("private", False))
+        stars = repo_or_err.get("stars_count", 0)
+        desc = repo_or_err.get("description") or "No description"
+        html_url = repo_or_err.get("html_url") or f"{server_url}/{full_name}"
 
-
-async def _try_save_pat(
-    message: Message, telegram_user_id: int, text: str
-) -> None:
-    result = validate(text)
-    if isinstance(result, HookError):
-        await message.answer(f"❌ {result.message}")
-        return
-
-    await User.write_token(telegram_user_id, text)
-    await message.answer(
-        "✅ Token saved. Use <code>/token &lt;new_token&gt;</code> to replace "
-        "it later."
-    )
-    await message.answer(
-        "Now add me as <b>administrator</b> to the group where you want "
-        "notifications, and run <code>/integrate username/repository</code> "
-        "there.\nYou can also send me a repo name (e.g. "
-        "<code>hikariatama/Hikka</code>) to view its summary."
-    )
+        summary = (
+            f"📐 <b>{'🔒' if is_private else ''} "
+            f"<a href='{html_url}'>{full_name}</a></b> "
+            f"{stars} ⭐️\n"
+            f"<i>{desc}</i>\n\n"
+            f"Server: <code>{server_url}</code>\n"
+            f"Run in a group: <code>/integrate {full_name}</code> "
+            "to start receiving notifications."
+        )
+        await message.answer(summary)

@@ -1,9 +1,3 @@
-"""/events — toggle which event types are forwarded to this chat.
-
-The keyboard also flags events that the GitHub-side webhook isn't currently
-subscribed to (typical after the bot adds support for new events): they get
-a ⚠️ marker and clicking them prompts the user to run /reinstall.
-"""
 import asyncio
 import time
 
@@ -21,7 +15,7 @@ from app.db.functions import Chat, EventSetting, User
 from app.db.models import EventType
 from app.utils.aiogram_helpers import accessible_message, safe_edit_markup
 from app.utils.group_admin import is_user_admin
-from app.utils.hooks import get_subscribed_events_for
+from app.utils.forgejo import HookError, get_subscribed_events_for
 
 router = Router()
 
@@ -48,16 +42,11 @@ EVENT_LABELS: dict[str, str] = {
     "public": "Repo made public",
 }
 
-# In-memory cache: chat_id -> (set_of_subscribed_events, expires_at).
-# Avoids hammering GitHub on every /events invocation. ``None`` value means
-# "couldn't determine" (e.g. no integrations / API failure).
 _SUBSCRIPTION_CACHE: dict[int, tuple[set[str] | None, float]] = {}
-_CACHE_TTL = 120.0  # seconds
+_CACHE_TTL = 120.0
 
 
 def invalidate_subscription_cache(chat_id: int) -> None:
-    """Drop the cached subscribed-events set for a chat. Call after
-    /reinstall so the next /events invocation sees fresh state."""
     _SUBSCRIPTION_CACHE.pop(chat_id, None)
 
 
@@ -100,10 +89,6 @@ def build_keyboard(
 async def compute_available_events(
     chat_id: int, host: str
 ) -> set[str] | None:
-    """Returns the intersection of events subscribed across all chat
-    integrations (an event is "available" only if every integration delivers
-    it). Returns None if the answer can't be determined (no integrations,
-    GitHub API failures, missing tokens)."""
     cached = _SUBSCRIPTION_CACHE.get(chat_id)
     now = time.monotonic()
     if cached and cached[1] > now:
@@ -114,29 +99,22 @@ async def compute_available_events(
         _SUBSCRIPTION_CACHE[chat_id] = (None, now + _CACHE_TTL)
         return None
 
-    # Resolve user tokens first (DB calls must run on the bot's loop).
-    pairs: list[tuple[str, str, str]] = []  # (token, repo_full_name, hook_endpoint)
+    results: list[set[str] | None] = []
     for integration in integrations:
         user = await User.get_or_none(id=integration.user_id)
         if user is None or not user.token:
             _SUBSCRIPTION_CACHE[chat_id] = (None, now + _CACHE_TTL)
             return None
-        pairs.append(
-            (
-                user.token,
-                integration.repository_name,
-                integration.integration_token,
-            )
+        server_url = integration.server_url or user.server_url or "https://codeberg.org"
+        res = await get_subscribed_events_for(
+            server_url,
+            user.token,
+            integration.repository_name,
+            host,
+            integration.integration_token,
         )
+        results.append(res if isinstance(res, set) else None)
 
-    def _query() -> list[set[str] | None]:
-        results: list[set[str] | None] = []
-        for token, repo_name, endpoint in pairs:
-            res = get_subscribed_events_for(token, repo_name, host, endpoint)
-            results.append(res if isinstance(res, set) else None)
-        return results
-
-    results = await asyncio.to_thread(_query)
     sets: list[set[str]] = [r for r in results if r is not None]
     if len(sets) != len(results) or not sets:
         _SUBSCRIPTION_CACHE[chat_id] = (None, now + _CACHE_TTL)
@@ -155,7 +133,7 @@ def _stale_events_text(available: set[str] | None) -> str:
     if not stale:
         return ""
     return (
-        "\n\n⚠️ Some events are not subscribed on the GitHub side "
+        "\n\n⚠️ Some events are not subscribed on the server side "
         "(integration was created before they were supported). "
         "Run /reinstall to update webhook subscriptions."
     )
@@ -164,13 +142,10 @@ def _stale_events_text(available: set[str] | None) -> str:
 async def render_events_message(
     chat_id: int, config: Config
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """Build the (text, keyboard) for the events settings UI for a given chat.
-    Used by the /events command and by the 'Events' shortcut on the
-    /integrations menu."""
     await Chat.ensure_registered(chat_id)
     available = await compute_available_events(chat_id, config.api.host)
     settings = await EventSetting.for_chat(chat_id)
-    text = "✨ Github events settings" + _stale_events_text(available)
+    text = "✨ Events settings" + _stale_events_text(available)
     return text, build_keyboard(settings, available)
 
 
@@ -227,7 +202,7 @@ async def toggle_event_setting(
     )
     if is_stale and not setting.enabled:
         return await callback.answer(
-            "This event isn't subscribed on the GitHub side. "
+            "This event isn't subscribed on the server side. "
             "Run /reinstall to update webhook subscriptions before enabling it.",
             show_alert=True,
         )

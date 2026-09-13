@@ -17,7 +17,7 @@ from app.config import Config
 from app.dialogs.repos._helpers import org_label
 from app.dialogs.repos.state import ReposSG, ReposState
 from app.utils.dialog_helpers import current_user_for_manager
-from app.utils.github_access import (
+from app.utils.forgejo import (
     invalidate_for_user,
     list_orgs_for_user,
 )
@@ -90,16 +90,11 @@ async def on_orgs_refresh(
 orgs_window = Window(
     Const("🏢 <b>Choose where to look</b>"),
     Const(
-        "\n❌ You haven't authorized me with GitHub yet.\n"
-        "Tap <b>🔌 Connect</b> on the keyboard to install the GitHub App "
-        "or set a Personal Access Token.",
+        "\n❌ You haven't connected Forgejo / Gitea yet.\n"
+        "Tap <b>🔌 Connect</b> on the keyboard to choose a server and set your Access Token.",
         when="no_auth",
     ),
     Format("\n❌ Couldn't fetch organisations: {error}", when="has_error"),
-    Const(
-        "\n<i>Tag legend: [A] = via GitHub App  •  [P] = via Personal Access Token</i>",
-        when="orgs",
-    ),
     ScrollingGroup(
         Select(
             Format("{item[label]}"),

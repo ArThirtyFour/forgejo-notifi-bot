@@ -4,7 +4,7 @@ from typing import Optional
 from aiogram.fsm.state import State, StatesGroup
 
 from app.utils.dialog_state import DialogState
-from app.utils.github_access import OrgSummary
+from app.utils.forgejo import OrgSummary
 
 
 class ReposSG(StatesGroup):

@@ -92,7 +92,8 @@ def parse_config(config_file: str = "config.toml") -> Config:
         config_file += ".toml"
     if not os.path.isfile(config_file):
         raise FileNotFoundError(
-            f"Config file not found: {config_file} no such file"
+            f"Config file not found: '{config_file}'. "
+            "Please create it by copying example.toml to config.toml and filling in your bot token."
         )
     with open(config_file, "r") as f:
         data = toml.load(f)

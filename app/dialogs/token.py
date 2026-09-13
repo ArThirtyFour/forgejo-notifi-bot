@@ -1,103 +1,146 @@
-"""Token management dialog.
-
-Three screens:
-* main          — show current token status + actions (Update / Test / Remove / Close)
-* awaiting_token — wait for the user to paste a PAT, validate it, save it
-* confirm_remove — confirmation step before wiping the token
-
-The PAT message is auto-deleted right after we read it, so the secret doesn't
-linger in the chat history.
-"""
-
 from typing import Any, Optional
 
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram_dialog import Dialog, DialogManager, Window
 from aiogram_dialog.widgets.input import MessageInput
-from aiogram_dialog.widgets.kbd import Button, Cancel, Row, Url
+from aiogram_dialog.widgets.kbd import Button, Cancel, Group, Row, SwitchTo
 from aiogram_dialog.widgets.text import Const, Format
-from magic_filter import F
 
-from app.config import Config
-from app.db.functions import Installation, User
+from app.db.functions import User
 from app.utils.dialog_helpers import current_user_for_manager as _current_user
 from app.utils.dialog_state import DialogState
-from app.utils.github_app import install_url
-from app.utils.hooks import HookError, validate
+from app.utils.forgejo import (
+    invalidate_for_user,
+    normalize_server_url,
+    validate_server,
+    validate_token,
+)
 
 
 class TokenSG(StatesGroup):
     main = State()
+    select_server = State()
+    awaiting_custom_server = State()
     awaiting_token = State()
     confirm_remove = State()
 
 
 class TokenState(DialogState):
-    """Typed view over TokenSG.dialog_data."""
+    selected_server: Optional[str] = None
     error: Optional[str] = None
 
 
 def _mask(token: str) -> str:
     if len(token) <= 10:
         return "•" * len(token)
-    return f"{token[:5]}…{token[-4:]}"
+    return f"{token[:4]}…{token[-4:]}"
 
 
 async def main_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
     user = await _current_user(dialog_manager)
-    config: Config = dialog_manager.middleware_data["config"]
+    server_url = (user.server_url if user and user.server_url else "https://codeberg.org")
+    has_token = bool(user and user.token)
 
-    # PAT status
-    if user and user.token:
-        pat_line = f"✅ Saved (<code>{_mask(user.token)}</code>)"
-        has_token = True
+    if has_token:
+        token_line = f"✅ Saved (<code>{_mask(user.token or '')}</code>)"
     else:
-        pat_line = "❌ No token saved"
-        has_token = False
-
-    # GitHub App status
-    app_configured = config.github_app.is_configured
-    app_url = ""
-    if app_configured and dialog_manager.event.from_user is not None:
-        try:
-            app_url = install_url(config, dialog_manager.event.from_user.id)
-        except RuntimeError:
-            app_configured = False
-
-    installations: list[Installation] = []
-    if user is not None:
-        installations = await Installation.for_user(user.id)
-    has_app = bool(installations)
-
-    if has_app:
-        accounts = ", ".join(f"<code>{i.account_login}</code>" for i in installations)
-        app_line = f"✅ Installed for {accounts}"
-        install_button_text = "🔗 Add another installation"
-    else:
-        app_line = "❌ Not installed"
-        install_button_text = "🔗 Install GitHub App"
+        token_line = "❌ No token saved"
 
     return {
-        "pat_line": pat_line,
+        "server_url": server_url,
+        "token_line": token_line,
         "has_token": has_token,
-        "app_configured": app_configured,
-        "app_url": app_url,
-        "app_line": app_line,
-        "has_app": has_app,
-        "install_button_text": install_button_text,
     }
 
 
-async def awaiting_getter(dialog_manager: DialogManager, **_: Any) -> dict[str, Any]:
-    error = TokenState.load(dialog_manager).error
-    return {"error": error or "", "has_error": bool(error)}
+async def awaiting_server_getter(
+    dialog_manager: DialogManager, **_: Any
+) -> dict[str, Any]:
+    state = TokenState.load(dialog_manager)
+    return {
+        "error": state.error or "",
+        "has_error": bool(state.error),
+    }
 
 
-async def on_update_clicked(
+async def awaiting_token_getter(
+    dialog_manager: DialogManager, **_: Any
+) -> dict[str, Any]:
+    user = await _current_user(dialog_manager)
+    state = TokenState.load(dialog_manager)
+    server_url = state.selected_server or (
+        user.server_url if user and user.server_url else "https://codeberg.org"
+    )
+    return {
+        "server_url": server_url,
+        "settings_url": f"{server_url}/user/settings/applications",
+        "error": state.error or "",
+        "has_error": bool(state.error),
+    }
+
+
+async def on_change_server_clicked(
     callback: CallbackQuery, button: Button, manager: DialogManager
 ) -> None:
     state = TokenState.load(manager)
+    state.error = None
+    state.save(manager)
+    await manager.switch_to(TokenSG.select_server)
+
+
+async def on_preset_server(
+    callback: CallbackQuery, button: Button, manager: DialogManager
+) -> None:
+    presets = {
+        "srv_codeberg": "https://codeberg.org",
+        "srv_forgejo": "https://next.forgejo.org",
+        "srv_disroot": "https://git.disroot.org",
+    }
+    server_url = presets.get(button.widget_id, "https://codeberg.org")
+    state = TokenState.load(manager)
+    state.selected_server = server_url
+    state.error = None
+    state.save(manager)
+    await manager.switch_to(TokenSG.awaiting_token)
+
+
+async def on_custom_server_clicked(
+    callback: CallbackQuery, button: Button, manager: DialogManager
+) -> None:
+    state = TokenState.load(manager)
+    state.error = None
+    state.save(manager)
+    await manager.switch_to(TokenSG.awaiting_custom_server)
+
+
+async def on_custom_server_message(
+    message: Message, _input: MessageInput, manager: DialogManager
+) -> None:
+    raw_url = (message.text or "").strip()
+    state = TokenState.load(manager)
+
+    normalized = normalize_server_url(raw_url)
+    ok, ver_or_err = await validate_server(normalized)
+    if not ok:
+        state.error = f"Cannot reach Forgejo/Gitea at {normalized}: {ver_or_err}"
+        state.save(manager)
+        return
+
+    state.selected_server = normalized
+    state.error = None
+    state.save(manager)
+    await manager.switch_to(TokenSG.awaiting_token)
+
+
+async def on_update_token_clicked(
+    callback: CallbackQuery, button: Button, manager: DialogManager
+) -> None:
+    user = await _current_user(manager)
+    state = TokenState.load(manager)
+    state.selected_server = (
+        user.server_url if user and user.server_url else "https://codeberg.org"
+    )
     state.error = None
     state.save(manager)
     await manager.switch_to(TokenSG.awaiting_token)
@@ -108,14 +151,22 @@ async def on_test_clicked(
 ) -> None:
     user = await _current_user(manager)
     if user is None or not user.token:
-        await callback.answer("No token to test.", show_alert=True)
+        await callback.answer("No token saved to test.", show_alert=True)
         return
-    result = validate(user.token)
-    if isinstance(result, HookError):
-        snippet = (result.message or "").split("\n", 1)[0][:180]
-        await callback.answer(f"❌ {snippet}", show_alert=True)
+
+    server_url = user.server_url or "https://codeberg.org"
+    ok, user_or_err = await validate_token(server_url, user.token)
+    if ok and isinstance(user_or_err, dict):
+        username = user_or_err.get("username") or user_or_err.get("login") or "user"
+        await callback.answer(
+            f"✅ Valid! Authenticated as @{username} on {server_url}",
+            show_alert=True,
+        )
     else:
-        await callback.answer("✅ Token is valid.", show_alert=True)
+        await callback.answer(
+            f"❌ Connection failed: {user_or_err}",
+            show_alert=True,
+        )
 
 
 async def on_remove_clicked(
@@ -130,6 +181,7 @@ async def on_remove_confirmed(
     user = await _current_user(manager)
     if user is not None:
         await User.filter(id=user.id).update(token=None)
+        invalidate_for_user(user)
     await manager.switch_to(TokenSG.main)
 
 
@@ -145,103 +197,152 @@ async def on_back_to_main(
 async def on_token_message(
     message: Message, _input: MessageInput, manager: DialogManager
 ) -> None:
-    text = (message.text or "").strip()
-    # Best-effort delete of the message containing the PAT.
+    token = (message.text or "").strip()
     try:
         await message.delete()
     except Exception:
         pass
 
     state = TokenState.load(manager)
+    user = await _current_user(manager)
+    server_url = state.selected_server or (
+        user.server_url if user and user.server_url else "https://codeberg.org"
+    )
 
-    result = validate(text)
-    if isinstance(result, HookError):
-        state.error = result.message
+    ok, user_or_err = await validate_token(server_url, token)
+    if not ok:
+        state.error = str(user_or_err)
         state.save(manager)
-        return  # stay on awaiting_token; getter will surface the error
+        return
 
     if message.from_user is None:
-        state.error = "Couldn't identify your Telegram user."
+        state.error = "Could not identify your Telegram account."
         state.save(manager)
         return
 
     user_id = message.from_user.id
     if await User.get_or_none(telegram_id=user_id) is None:
-        await User.register(user_id)
-    await User.write_token(user_id, text)
+        await User.register(user_id, server_url=server_url)
+    await User.set_server_and_token(user_id, server_url, token)
+
+    db_user = await User.get_or_none(telegram_id=user_id)
+    if db_user:
+        invalidate_for_user(db_user)
 
     state.error = None
+    state.selected_server = None
     state.save(manager)
     await manager.switch_to(TokenSG.main)
 
 
 main_window = Window(
-    Const("🔑 <b>GitHub Connection</b>\n"),
-    # App-section first — recommended path. PAT below as a legacy fallback.
-    Format("🔗 <b>App:</b> {app_line}", when="app_configured"),
-    Url(
-        text=Format("{install_button_text}"),
-        url=Format("{app_url}"),
-        id="install_app",
-        when="app_configured",
-    ),
-    Const(
-        "\n<b>—</b>\n"
-        "🔑 <b>PAT</b> <i>(deprecated)</i>\n"
-        "<i>Use GitHub App above when possible — it gives the bot only the "
-        "repos you explicitly select, uses short-lived auto-rotating tokens, "
-        "and can be revoked from GitHub UI in one click. PAT support stays "
-        "for legacy installs and self-hosted deployments without an App.</i>",
-        when="app_configured",
-    ),
-    # When the App isn't configured on this deployment at all, keep the
-    # short PAT-only block without the "deprecated" banner.
-    Const("🔑 <b>Personal Access Token</b>", when=~F["app_configured"]),
-    Format("Status: {pat_line}"),
+    Const("🌐 <b>Forgejo / Gitea Connection</b>\n"),
+    Format("🌐 <b>Server:</b> <code>{server_url}</code>"),
+    Format("🔑 <b>Access Token:</b> {token_line}\n"),
     Row(
-        Button(Const("🔄 Update PAT"), id="upd", on_click=on_update_clicked),
         Button(
-            Const("🧪 Test PAT"),
-            id="tst",
+            Const("🌐 Change Server"),
+            id="change_server",
+            on_click=on_change_server_clicked,
+        ),
+        Button(
+            Const("🔑 Update Token"),
+            id="update_token",
+            on_click=on_update_token_clicked,
+        ),
+    ),
+    Row(
+        Button(
+            Const("🧪 Test Connection"),
+            id="test_conn",
             on_click=on_test_clicked,
             when="has_token",
         ),
-    ),
-    Button(
-        Const("🗑 Remove PAT"),
-        id="rm",
-        on_click=on_remove_clicked,
-        when="has_token",
+        Button(
+            Const("🗑 Remove"),
+            id="rm_conn",
+            on_click=on_remove_clicked,
+            when="has_token",
+        ),
     ),
     Cancel(Const("❎ Close")),
     state=TokenSG.main,
     getter=main_getter,
 )
 
-awaiting_window = Window(
+select_server_window = Window(
     Const(
-        "📥 <b>Send your Personal Access Token</b> as a regular message.\n\n"
-        "📚 <b>How to create a token:</b>\n"
-        "https://telegra.ph/Poluchenie-tokena-GitHub-01-30\n\n"
-        "ℹ️ <b>Required scopes:</b>\n"
-        "• <code>admin:repo_hook</code> — to manage webhooks (always)\n"
-        "• <code>repo</code> — to access private repositories\n\n"
-        "🔒 The message containing your token will be auto-deleted as "
-        "soon as I receive it."
+        "🌐 <b>Select your Forgejo / Gitea Server</b>\n\n"
+        "Choose a popular instance below or enter your self-hosted URL:"
+    ),
+    Group(
+        Button(
+            Const("🏔 Codeberg.org"),
+            id="srv_codeberg",
+            on_click=on_preset_server,
+        ),
+        Button(
+            Const("🦊 Forgejo Next (next.forgejo.org)"),
+            id="srv_forgejo",
+            on_click=on_preset_server,
+        ),
+        Button(
+            Const("🌱 Disroot Git (git.disroot.org)"),
+            id="srv_disroot",
+            on_click=on_preset_server,
+        ),
+        Button(
+            Const("✏️ Enter custom server URL…"),
+            id="srv_custom",
+            on_click=on_custom_server_clicked,
+        ),
+        width=1,
+    ),
+    Button(Const("◀️ Back"), id="back_main", on_click=on_back_to_main),
+    state=TokenSG.select_server,
+)
+
+awaiting_custom_server_window = Window(
+    Const(
+        "🌐 <b>Enter your Forgejo / Gitea server URL</b>\n\n"
+        "Example: <code>https://git.example.com</code> or <code>codeberg.org</code>\n\n"
+        "Send the URL as a text message."
+    ),
+    Format("\n❌ {error}", when="has_error"),
+    MessageInput(on_custom_server_message),
+    SwitchTo(
+        Const("◀️ Back"),
+        id="back_select",
+        state=TokenSG.select_server,
+    ),
+    state=TokenSG.awaiting_custom_server,
+    getter=awaiting_server_getter,
+)
+
+awaiting_token_window = Window(
+    Format(
+        "🔑 <b>Send your Personal Access Token for {server_url}</b>\n\n"
+        "1. Open: {settings_url}\n"
+        "2. Click <b>Generate New Token</b>\n"
+        "3. Required permissions:\n"
+        "• <code>read:organization</code>\n"
+        "• <code>read:repository</code>\n"
+        "• <code>write:repository</code> (or <code>repo:hook</code> to create webhooks)\n\n"
+        "🔒 <i>The message containing your token will be auto-deleted immediately.</i>"
     ),
     Format("\n❌ {error}", when="has_error"),
     MessageInput(on_token_message),
     Button(Const("◀️ Cancel"), id="cancel", on_click=on_back_to_main),
     state=TokenSG.awaiting_token,
-    getter=awaiting_getter,
+    getter=awaiting_token_getter,
 )
 
 confirm_remove_window = Window(
     Const(
-        "⚠️ Are you sure you want to remove your token?\n\n"
-        "Existing webhooks on the GitHub side will keep firing — "
-        "but you won't be able to add new integrations or run /reinstall "
-        "until you set a new token."
+        "⚠️ <b>Are you sure you want to disconnect?</b>\n\n"
+        "Your saved token will be removed from the bot. "
+        "Existing webhooks will continue firing, but you won't be able "
+        "to manage or add new repos until you reconnect."
     ),
     Row(
         Button(Const("✅ Yes, remove"), id="yes", on_click=on_remove_confirmed),
@@ -250,5 +351,10 @@ confirm_remove_window = Window(
     state=TokenSG.confirm_remove,
 )
 
-
-token_dialog = Dialog(main_window, awaiting_window, confirm_remove_window)
+token_dialog = Dialog(
+    main_window,
+    select_server_window,
+    awaiting_custom_server_window,
+    awaiting_token_window,
+    confirm_remove_window,
+)

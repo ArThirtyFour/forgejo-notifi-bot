@@ -3,7 +3,7 @@ from aiogram_dialog import DialogManager
 
 from app.db.functions import Integration
 from app.utils.dialog_helpers import current_user_for_manager
-from app.utils.github_access import OrgSummary, RepoSummary
+from app.utils.forgejo import OrgSummary, RepoSummary
 
 
 async def user_integrations(manager: DialogManager) -> set[str]:
@@ -17,8 +17,7 @@ async def user_integrations(manager: DialogManager) -> set[str]:
 
 def org_label(org: OrgSummary) -> str:
     icon = "👤" if org["is_personal"] else "🏢"
-    tag = " " + ("[A]" if org["source"] == "app" else "[P]")
-    return f"{icon} {org['login']}{tag}"
+    return f"{icon} {org['login']}"
 
 
 def repo_label(repo: RepoSummary, integrated: set[str]) -> str:
