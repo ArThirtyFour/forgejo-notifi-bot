@@ -1,9 +1,6 @@
 [bot]
 token = ""
-# Bot's @username (without @). Required for GitHub App install flow:
-# after the user installs the App, GitHub redirects to our /github/setup,
-# which then redirects to https://t.me/<username>?start=installed_<id>
-# so the user lands back in this bot with a confirmation.
+# Bot's @username (without @). Used for deep links and group invite helpers.
 username = ""
 
 [database]
@@ -15,4 +12,5 @@ throttling_rate = 0.5
 drop_pending_updates = false
 
 [api]
+# Public host (or domain) if using webhooks instead of polling
 host = "localhost:4454"

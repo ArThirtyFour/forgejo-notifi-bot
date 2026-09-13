@@ -5,13 +5,13 @@ After=network.target
 [Service]
 Type=simple
 User=ar34
-WorkingDirectory=/home/ar34/github-notifi-bot
+WorkingDirectory=/home/exmaple/github-notifi-bot
 
 # Variant 1: Using `uv run` (recommended)
 ExecStart=/usr/bin/uv run python -m app
 
 # Variant 2: Using virtualenv python directly
-# ExecStart=/home/ar34/github-notifi-bot/.venv/bin/python -m app
+# ExecStart=/home/exmaple/github-notifi-bot/.venv/bin/python -m app
 
 Restart=always
 RestartSec=5
