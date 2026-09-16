@@ -16,6 +16,10 @@ FastAPI, and Tortoise-ORM.
 
 ![Screenshot](.github/images/repos.png)
 
+## Architecture
+
+![Workflow](.github/images/workflow.svg)
+
 ## Features
 
 - 🔔 **Real-time notifications** for Forgejo event types (see the table below) delivered as Telegram-HTML messages.
