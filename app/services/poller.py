@@ -55,10 +55,15 @@ async def _poll_commits(
         return
 
     new_commits = []
+    found_previous = False
     for c in commits:
         if c.get("sha") == integration.last_commit_sha:
+            found_previous = True
             break
         new_commits.append(c)
+
+    if not found_previous:
+        new_commits = [commits[0]]
 
     if not new_commits:
         integration.last_commit_sha = latest_sha
@@ -129,9 +134,18 @@ async def _poll_commits(
         )
         sender_html_url = top_author.get("html_url") or f"{server_url}/{sender_login}"
 
+        if found_previous and integration.last_commit_sha:
+            compare_link = f"{server_url}/{repo_name}/compare/{integration.last_commit_sha}...{latest_sha}"
+        else:
+            parents = new_commits[0].get("parents") or []
+            if parents and parents[0].get("sha"):
+                compare_link = f"{server_url}/{repo_name}/compare/{parents[0]['sha']}...{latest_sha}"
+            else:
+                compare_link = new_commits[0].get("html_url") or f"{server_url}/{repo_name}/commit/{latest_sha}"
+
         payload = {
             "ref": "refs/heads/main",
-            "compare": f"{server_url}/{repo_name}/compare/{integration.last_commit_sha}...{latest_sha}",
+            "compare": compare_link,
             "commits": commits_payload,
             "repository": {
                 "full_name": repo_name,

@@ -232,6 +232,14 @@ async def webhook(
             await send_message(session, integration, message)
             sent += 1
 
+            if event_type == "push":
+                after_sha = payload.get("after")
+                if not after_sha and payload.get("commits"):
+                    after_sha = payload["commits"][-1].get("id")
+                if after_sha and after_sha != "0000000000000000000000000000000000000000":
+                    integration.last_commit_sha = after_sha
+                    await integration.save()
+
     logging.info(
         "Webhook %s for token %s…: %d integrations, sent=%d, "
         "skipped(event=%d floodwait=%d no_msg=%d)",
