@@ -150,6 +150,12 @@ async def _send_one_chunk(
     try:
         status, body = await _post_send(session, data)
         if status < 400:
+            logging.info(
+                "Delivered notification for %s to chat %s%s",
+                integration.repository_name or "unknown",
+                chat_id,
+                f" (topic {topic_id})" if topic_id else "",
+            )
             return
 
         if topic_id and status == 400 and (

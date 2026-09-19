@@ -203,13 +203,23 @@ async def _poll_commits(
                 current_branch_map[name] = sha
 
         if integration.id not in _known_branches:
-            _known_branches[integration.id] = current_branch_map
-            if integration.last_commit_sha is None and branches:
-                default_sha = (branches[0].get("commit") or {}).get("id")
-                if default_sha:
-                    integration.last_commit_sha = default_sha
-                    await integration.save()
-            return
+            if integration.last_commit_sha is None:
+                _known_branches[integration.id] = current_branch_map
+                if branches:
+                    default_sha = (branches[0].get("commit") or {}).get("id")
+                    if default_sha:
+                        integration.last_commit_sha = default_sha
+                        await integration.save()
+                return
+            else:
+                _known_branches[integration.id] = {
+                    b_name: (
+                        integration.last_commit_sha
+                        if b_name in ("main", "master")
+                        else b_sha
+                    )
+                    for b_name, b_sha in current_branch_map.items()
+                }
 
         prev_map = _known_branches[integration.id]
 
@@ -342,15 +352,21 @@ async def _poll_pull_requests(
                 bool(p.get("merged")),
             )
 
-    if integration.id not in _known_pulls:
+    is_initial = integration.last_pr_id is None
+    max_id = max((p.get("id", 0) for p in pulls), default=0)
+
+    if is_initial:
         _known_pulls[integration.id] = current_pull_map
-        max_id = max((p.get("id", 0) for p in pulls), default=0)
-        if integration.last_pr_id is None:
-            integration.last_pr_id = max_id
-            await integration.save()
+        integration.last_pr_id = max_id
+        await integration.save()
         return
 
-    prev_map = _known_pulls[integration.id]
+    prev_map = _known_pulls.get(integration.id)
+    if prev_map is None:
+        prev_map = {}
+        for p_id, val in current_pull_map.items():
+            if p_id <= (integration.last_pr_id or 0):
+                prev_map[p_id] = val
 
     if await EventSetting.is_enabled(chat.chat_id, "pull_request"):
         for pr in pulls:
@@ -364,7 +380,8 @@ async def _poll_pull_requests(
 
             action: Optional[str] = None
             if prev is None:
-                action = "opened"
+                if pr_id > (integration.last_pr_id or 0):
+                    action = "opened"
             else:
                 old_state, old_merged = prev
                 if old_state == "open" and new_state == "closed":
@@ -462,15 +479,24 @@ async def _poll_issues(
         if i_id and not i.get("pull_request"):
             current_issue_map[i_id] = i.get("state", "open")
 
-    if integration.id not in _known_issues:
+    is_initial = integration.last_issue_id is None
+    max_id = max(
+        (i.get("id", 0) for i in issues if not i.get("pull_request")),
+        default=0,
+    )
+
+    if is_initial:
         _known_issues[integration.id] = current_issue_map
-        max_id = max((i.get("id", 0) for i in issues), default=0)
-        if integration.last_issue_id is None:
-            integration.last_issue_id = max_id
-            await integration.save()
+        integration.last_issue_id = max_id
+        await integration.save()
         return
 
-    prev_map = _known_issues[integration.id]
+    prev_map = _known_issues.get(integration.id)
+    if prev_map is None:
+        prev_map = {}
+        for i_id, val in current_issue_map.items():
+            if i_id <= (integration.last_issue_id or 0):
+                prev_map[i_id] = val
 
     if await EventSetting.is_enabled(chat.chat_id, "issues"):
         for issue in issues:
@@ -485,7 +511,8 @@ async def _poll_issues(
 
             action: Optional[str] = None
             if old_state is None:
-                action = "opened"
+                if i_id > (integration.last_issue_id or 0):
+                    action = "opened"
             elif old_state == "open" and new_state == "closed":
                 action = "closed"
             elif old_state == "closed" and new_state == "open":
