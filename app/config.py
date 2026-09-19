@@ -52,6 +52,7 @@ class ConfigSettings(_Section):
     owner_id: int
     throttling_rate: float = 0.5
     drop_pending_updates: bool = True
+    poll_interval: float = 3.0
 
 
 class ConfigApi(_Section):

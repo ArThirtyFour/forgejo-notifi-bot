@@ -10,6 +10,8 @@ models = ["app.db.functions", "aerich.models"]
 owner_id = 1218845111
 throttling_rate = 0.5
 drop_pending_updates = false
+# Poller interval in seconds (default: 3.0)
+poll_interval = 3.0
 
 [api]
 # Public host (or domain) if using webhooks instead of polling

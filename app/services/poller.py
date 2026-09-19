@@ -15,6 +15,8 @@ POLL_INTERVAL = 15.0
 
 
 _known_branches: dict[int, dict[str, str]] = {}
+_known_pulls: dict[int, dict[int, tuple[str, bool]]] = {}
+_known_issues: dict[int, dict[int, str]] = {}
 
 
 async def _send_push_notification(
@@ -308,7 +310,9 @@ async def _poll_pull_requests(
 ) -> None:
     repo_name = integration.repository_name
     chat = integration.chat
-    url = f"{server_url}/api/v1/repos/{repo_name}/pulls?state=all&limit=10"
+    if not repo_name or not chat:
+        return
+    url = f"{server_url}/api/v1/repos/{repo_name}/pulls?state=all&sort=recentupdate&limit=20"
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/json",
@@ -329,66 +333,96 @@ async def _poll_pull_requests(
     if not isinstance(pulls, list) or not pulls:
         return
 
-    max_id = max((p.get("id", 0) for p in pulls), default=0)
-    if integration.last_pr_id is None:
-        integration.last_pr_id = max_id
-        await integration.save()
+    current_pull_map: dict[int, tuple[str, bool]] = {}
+    for p in pulls:
+        p_id = p.get("id")
+        if p_id:
+            current_pull_map[p_id] = (
+                p.get("state", "open"),
+                bool(p.get("merged")),
+            )
+
+    if integration.id not in _known_pulls:
+        _known_pulls[integration.id] = current_pull_map
+        max_id = max((p.get("id", 0) for p in pulls), default=0)
+        if integration.last_pr_id is None:
+            integration.last_pr_id = max_id
+            await integration.save()
         return
 
-    new_pulls = [p for p in pulls if p.get("id", 0) > integration.last_pr_id]
-    if new_pulls and await EventSetting.is_enabled(chat.chat_id, "pull_request"):
-        for pr in new_pulls:
-            user_obj = pr.get("user") or {}
-            username = (
-                user_obj.get("username")
-                or user_obj.get("login")
-                or "user"
-            )
-            user_html = user_obj.get("html_url") or f"{server_url}/{username}"
-            action = "opened"
-            if pr.get("merged"):
-                action = "closed"
-            elif pr.get("state") == "closed":
-                action = "closed"
+    prev_map = _known_pulls[integration.id]
 
-            payload = {
-                "action": action,
-                "number": pr.get("number", 1),
-                "pull_request": {
+    if await EventSetting.is_enabled(chat.chat_id, "pull_request"):
+        for pr in pulls:
+            pr_id = pr.get("id")
+            if not pr_id:
+                continue
+
+            new_state = pr.get("state", "open")
+            new_merged = bool(pr.get("merged"))
+            prev = prev_map.get(pr_id)
+
+            action: Optional[str] = None
+            if prev is None:
+                action = "opened"
+            else:
+                old_state, old_merged = prev
+                if old_state == "open" and new_state == "closed":
+                    action = "closed"
+                elif old_state == "closed" and new_state == "open":
+                    action = "reopened"
+                elif not old_merged and new_merged:
+                    action = "closed"
+
+            if action:
+                user_obj = pr.get("user") or {}
+                username = (
+                    user_obj.get("username")
+                    or user_obj.get("login")
+                    or "user"
+                )
+                user_html = (
+                    user_obj.get("html_url") or f"{server_url}/{username}"
+                )
+
+                payload = {
+                    "action": action,
                     "number": pr.get("number", 1),
-                    "title": pr.get("title", ""),
-                    "body": pr.get("body", ""),
-                    "html_url": (
-                        pr.get("html_url")
-                        or f"{server_url}/{repo_name}/pulls/{pr.get('number')}"
-                    ),
-                    "user": {
+                    "pull_request": {
+                        "number": pr.get("number", 1),
+                        "title": pr.get("title", ""),
+                        "body": pr.get("body", ""),
+                        "html_url": (
+                            pr.get("html_url")
+                            or f"{server_url}/{repo_name}/pulls/{pr.get('number')}"
+                        ),
+                        "user": {
+                            "login": username,
+                            "username": username,
+                            "html_url": user_html,
+                        },
+                        "merged": new_merged,
+                        "head": {"ref": (pr.get("head") or {}).get("ref", "")},
+                        "base": {"ref": (pr.get("base") or {}).get("ref", "")},
+                    },
+                    "repository": {
+                        "full_name": repo_name,
+                        "html_url": f"{server_url}/{repo_name}",
+                    },
+                    "sender": {
                         "login": username,
                         "username": username,
                         "html_url": user_html,
                     },
-                    "merged": pr.get("merged", False),
-                    "head": {"ref": (pr.get("head") or {}).get("ref", "")},
-                    "base": {"ref": (pr.get("base") or {}).get("ref", "")},
-                },
-                "repository": {
-                    "full_name": repo_name,
-                    "html_url": f"{server_url}/{repo_name}",
-                },
-                "sender": {
-                    "login": username,
-                    "username": username,
-                    "html_url": user_html,
-                },
-            }
-            ctx = EventCtx(auth_token=token, server_url=server_url, config=config)
-            msg = build_message("pull_request", payload, ctx)
-            if msg:
-                await send_message(session, integration, msg)
+                }
+                ctx = EventCtx(
+                    auth_token=token, server_url=server_url, config=config
+                )
+                msg = build_message("pull_request", payload, ctx)
+                if msg:
+                    await send_message(session, integration, msg)
 
-    if max_id > integration.last_pr_id:
-        integration.last_pr_id = max_id
-        await integration.save()
+    _known_pulls[integration.id] = current_pull_map
 
 
 async def _poll_issues(
@@ -400,7 +434,9 @@ async def _poll_issues(
 ) -> None:
     repo_name = integration.repository_name
     chat = integration.chat
-    url = f"{server_url}/api/v1/repos/{repo_name}/issues?type=issues&state=all&limit=10"
+    if not repo_name or not chat:
+        return
+    url = f"{server_url}/api/v1/repos/{repo_name}/issues?type=issues&state=all&sort=recentupdate&limit=20"
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/json",
@@ -420,59 +456,85 @@ async def _poll_issues(
     if not isinstance(issues, list) or not issues:
         return
 
-    max_id = max((i.get("id", 0) for i in issues), default=0)
-    if integration.last_issue_id is None:
-        integration.last_issue_id = max_id
-        await integration.save()
+    current_issue_map: dict[int, str] = {}
+    for i in issues:
+        i_id = i.get("id")
+        if i_id and not i.get("pull_request"):
+            current_issue_map[i_id] = i.get("state", "open")
+
+    if integration.id not in _known_issues:
+        _known_issues[integration.id] = current_issue_map
+        max_id = max((i.get("id", 0) for i in issues), default=0)
+        if integration.last_issue_id is None:
+            integration.last_issue_id = max_id
+            await integration.save()
         return
 
-    new_issues = [
-        i for i in issues
-        if i.get("id", 0) > integration.last_issue_id and not i.get("pull_request")
-    ]
-    if new_issues and await EventSetting.is_enabled(chat.chat_id, "issues"):
-        for issue in new_issues:
-            user_obj = issue.get("user") or {}
-            username = (
-                user_obj.get("username")
-                or user_obj.get("login")
-                or "user"
-            )
-            user_html = user_obj.get("html_url") or f"{server_url}/{username}"
-            payload = {
-                "action": "opened",
-                "issue": {
-                    "number": issue.get("number", 1),
-                    "title": issue.get("title", ""),
-                    "html_url": (
-                        issue.get("html_url")
-                        or f"{server_url}/{repo_name}/issues/{issue.get('number')}"
-                    ),
-                    "body": issue.get("body", ""),
-                    "user": {
+    prev_map = _known_issues[integration.id]
+
+    if await EventSetting.is_enabled(chat.chat_id, "issues"):
+        for issue in issues:
+            if issue.get("pull_request"):
+                continue
+            i_id = issue.get("id")
+            if not i_id:
+                continue
+
+            new_state = issue.get("state", "open")
+            old_state = prev_map.get(i_id)
+
+            action: Optional[str] = None
+            if old_state is None:
+                action = "opened"
+            elif old_state == "open" and new_state == "closed":
+                action = "closed"
+            elif old_state == "closed" and new_state == "open":
+                action = "reopened"
+
+            if action:
+                user_obj = issue.get("user") or {}
+                username = (
+                    user_obj.get("username")
+                    or user_obj.get("login")
+                    or "user"
+                )
+                user_html = (
+                    user_obj.get("html_url") or f"{server_url}/{username}"
+                )
+                payload = {
+                    "action": action,
+                    "issue": {
+                        "number": issue.get("number", 1),
+                        "title": issue.get("title", ""),
+                        "html_url": (
+                            issue.get("html_url")
+                            or f"{server_url}/{repo_name}/issues/{issue.get('number')}"
+                        ),
+                        "body": issue.get("body", ""),
+                        "user": {
+                            "login": username,
+                            "username": username,
+                            "html_url": user_html,
+                        },
+                    },
+                    "repository": {
+                        "full_name": repo_name,
+                        "html_url": f"{server_url}/{repo_name}",
+                    },
+                    "sender": {
                         "login": username,
                         "username": username,
                         "html_url": user_html,
                     },
-                },
-                "repository": {
-                    "full_name": repo_name,
-                    "html_url": f"{server_url}/{repo_name}",
-                },
-                "sender": {
-                    "login": username,
-                    "username": username,
-                    "html_url": user_html,
-                },
-            }
-            ctx = EventCtx(auth_token=token, server_url=server_url, config=config)
-            msg = build_message("issues", payload, ctx)
-            if msg:
-                await send_message(session, integration, msg)
+                }
+                ctx = EventCtx(
+                    auth_token=token, server_url=server_url, config=config
+                )
+                msg = build_message("issues", payload, ctx)
+                if msg:
+                    await send_message(session, integration, msg)
 
-    if max_id > integration.last_issue_id:
-        integration.last_issue_id = max_id
-        await integration.save()
+    _known_issues[integration.id] = current_issue_map
 
 
 async def _poll_releases(
@@ -561,7 +623,8 @@ async def _poll_releases(
 
 
 async def poller_loop(config: Config) -> None:
-    logging.info("Forgejo background poller started (interval: %.0fs)", POLL_INTERVAL)
+    interval = getattr(config.settings, "poll_interval", 3.0)
+    logging.info("Forgejo background poller started (interval: %.1fs)", interval)
     while True:
         try:
             integrations = await Integration.all().prefetch_related("chat", "user")
@@ -585,4 +648,4 @@ async def poller_loop(config: Config) -> None:
         except Exception as e:
             logging.error("Error in poller_loop: %s", e)
 
-        await asyncio.sleep(POLL_INTERVAL)
+        await asyncio.sleep(interval)
