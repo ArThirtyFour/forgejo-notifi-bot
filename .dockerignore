@@ -1,0 +1,30 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Database files
+*.sqlite3
+*.db
+data/
+
+# Git
+.git/
+.gitignore
+
+# Configs and sensitive files (mount config.toml at runtime)
+config.toml
+*.pem
+
+# IDEs and OS files
+.idea/
+.vscode/
+*.swp
+.DS_Store

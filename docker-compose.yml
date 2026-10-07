@@ -1,0 +1,14 @@
+services:
+  forgejo-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forgejo-notifi-bot
+    restart: unless-stopped
+    ports:
+      - "4454:4454"
+    volumes:
+      - ./config.toml:/app/config.toml:ro
+      - ./data:/app/data
+      # Or mount sqlite database directly if file_name is configured in the root:
+      - ./production-database.sqlite3:/app/production-database.sqlite3

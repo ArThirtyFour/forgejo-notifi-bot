@@ -124,6 +124,28 @@ app/
 
 ## Quick Start
 
+### Option A: Running with Docker (Recommended)
+
+1. **Configure the bot:**
+   ```bash
+   cp example.toml config.toml
+   ```
+   Edit `config.toml` and fill in your Telegram bot token (`token`) and owner ID (`owner_id`).
+
+2. **Start with Docker Compose:**
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. **Check logs:**
+   ```bash
+   docker compose logs -f
+   ```
+
+---
+
+### Option B: Running locally (Python / uv)
+
 1. **Install dependencies (via `uv` or `pip`):**
    ```bash
    uv venv
@@ -142,11 +164,13 @@ app/
    uv run python -m app
    ```
 
-4. **Connect in Telegram:**
-   - In DM with the bot, tap **🔌 Connect** (or `/connect`).
-   - Pick your instance (Codeberg, Forgejo Next, Disroot, or enter custom URL).
-   - Send your Personal Access Token.
-   - Add the bot to your group/channel as an admin and use `/integrate owner/repo` or the **🏢 Repos** button!
+---
+
+### Connect in Telegram:
+- In DM with the bot, tap **🔌 Connect** (or `/connect`).
+- Pick your instance (Codeberg, Forgejo Next, Disroot, or enter custom URL).
+- Send your Personal Access Token.
+- Add the bot to your group/channel as an admin and use `/integrate owner/repo` or the **🏢 Repos** button!
 
 ## Commands
 
