@@ -17,6 +17,8 @@ POLL_INTERVAL = 15.0
 _known_branches: dict[int, dict[str, str]] = {}
 _known_pulls: dict[int, dict[int, tuple[str, bool]]] = {}
 _known_issues: dict[int, dict[int, str]] = {}
+_known_commit_fallback: set[int] = set()
+_known_releases: set[int] = set()
 
 
 async def _send_push_notification(
@@ -203,23 +205,14 @@ async def _poll_commits(
                 current_branch_map[name] = sha
 
         if integration.id not in _known_branches:
-            if integration.last_commit_sha is None:
-                _known_branches[integration.id] = current_branch_map
-                if branches:
-                    default_sha = (branches[0].get("commit") or {}).get("id")
-                    if default_sha:
-                        integration.last_commit_sha = default_sha
-                        await integration.save()
-                return
-            else:
-                _known_branches[integration.id] = {
-                    b_name: (
-                        integration.last_commit_sha
-                        if b_name in ("main", "master")
-                        else b_sha
-                    )
-                    for b_name, b_sha in current_branch_map.items()
-                }
+            _known_branches[integration.id] = current_branch_map
+            integration.last_commit_sha = (
+                current_branch_map.get("main")
+                or current_branch_map.get("master")
+                or next(iter(current_branch_map.values()), None)
+            )
+            await integration.save()
+            return
 
         prev_map = _known_branches[integration.id]
 
@@ -289,9 +282,10 @@ async def _poll_commits(
     if not latest_sha:
         return
 
-    if integration.last_commit_sha is None:
+    if integration.id not in _known_commit_fallback or integration.last_commit_sha is None:
         integration.last_commit_sha = latest_sha
         await integration.save()
+        _known_commit_fallback.add(integration.id)
         return
 
     if latest_sha == integration.last_commit_sha:
@@ -340,7 +334,7 @@ async def _poll_pull_requests(
         logging.debug("Poller pulls error for %s: %s", repo_name, e)
         return
 
-    if not isinstance(pulls, list) or not pulls:
+    if not isinstance(pulls, list):
         return
 
     current_pull_map: dict[int, tuple[str, bool]] = {}
@@ -352,7 +346,7 @@ async def _poll_pull_requests(
                 bool(p.get("merged")),
             )
 
-    is_initial = integration.last_pr_id is None
+    is_initial = integration.id not in _known_pulls
     max_id = max((p.get("id", 0) for p in pulls), default=0)
 
     if is_initial:
@@ -440,6 +434,9 @@ async def _poll_pull_requests(
                     await send_message(session, integration, msg)
 
     _known_pulls[integration.id] = current_pull_map
+    if max_id > (integration.last_pr_id or 0):
+        integration.last_pr_id = max_id
+        await integration.save()
 
 
 async def _poll_issues(
@@ -470,7 +467,7 @@ async def _poll_issues(
     except Exception:
         return
 
-    if not isinstance(issues, list) or not issues:
+    if not isinstance(issues, list):
         return
 
     current_issue_map: dict[int, str] = {}
@@ -479,7 +476,7 @@ async def _poll_issues(
         if i_id and not i.get("pull_request"):
             current_issue_map[i_id] = i.get("state", "open")
 
-    is_initial = integration.last_issue_id is None
+    is_initial = integration.id not in _known_issues
     max_id = max(
         (i.get("id", 0) for i in issues if not i.get("pull_request")),
         default=0,
@@ -562,6 +559,9 @@ async def _poll_issues(
                     await send_message(session, integration, msg)
 
     _known_issues[integration.id] = current_issue_map
+    if max_id > (integration.last_issue_id or 0):
+        integration.last_issue_id = max_id
+        await integration.save()
 
 
 async def _poll_releases(
@@ -590,13 +590,14 @@ async def _poll_releases(
     except Exception:
         return
 
-    if not isinstance(releases, list) or not releases:
+    if not isinstance(releases, list):
         return
 
     max_id = max((r.get("id", 0) for r in releases), default=0)
-    if integration.last_release_id is None:
+    if integration.id not in _known_releases or integration.last_release_id is None:
         integration.last_release_id = max_id
         await integration.save()
+        _known_releases.add(integration.id)
         return
 
     new_releases = [
