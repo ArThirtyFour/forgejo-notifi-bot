@@ -1,6 +1,7 @@
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import ErrorEvent, Message
+from aiogram_dialog.api.exceptions import UnknownIntent
 
 import logging
 import traceback
@@ -13,9 +14,16 @@ router = Router()
 
 @router.error()
 async def error_handler(event: ErrorEvent, config: Config):
-    bot = event.update.bot
     update = event.update
     exception = event.exception
+    if isinstance(exception, UnknownIntent) and update.callback_query is not None:
+        await update.callback_query.answer(
+            "This menu has expired. Please open it again.",
+            show_alert=True,
+        )
+        return
+
+    bot = update.bot
     if bot is None:
         logging.error("Error event without bot reference: %s", exception)
         return
