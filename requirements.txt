@@ -1,7 +1,7 @@
 aerich
 aiogram==3.20.0
 aiogram-dialog>=2.2,<3
-aiohttp==3.11.0
+aiohttp==3.14.5
 aiosqlite
 cachetools
 coloredlogs
